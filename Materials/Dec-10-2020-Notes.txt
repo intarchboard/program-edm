@@ -1,0 +1,436 @@
+EDM meeting - December 10, 2020
+
+https://youtu.be/QP6_x4dBiYY
+
+Attendees:
+Carsten Bormann
+Eric Rescorla
+Eric Vyncke
+Chris Wood
+Mirja Kühlewind
+Martin Thomson
+Ben Kaduk
+Colin Perkins
+Peter Koch
+Brian Trammell
+Spencer Dawkins
+Lixia Zhang
+Tommy Pauly
+
+Notes:
+
+Tommy: Welcome to our December meeting. Last talked in September, planning on keeping a cadence at least 3x a year, like main IETF meetings.
+Today, want to focus on some broad thoughts on extensibility brought up by draft-iab-use-it-or-lose-it, specifically the directions we want to take the document rather than editorial issues.
+
+Several issues filed to focus the discussion:
+
+- What makes a version negotiation mechanism successful? https://github.com/intarchboard/edm/issues/8
+- Tradeoffs of different failure modes for extension points, https://github.com/intarchboard/edm/issues/9
+- How should we coordinate greasing experiments? https://github.com/intarchboard/edm/issues/4
+- Can greasing mechanisms avoid reserving or coordinating "fake" values? https://github.com/intarchboard/edm/issues/7
+
+Version negotiation:
+
+Tommy: The document comments on RFC 6709 that provides version negotiation suggestions, to be simple, but use-it-or-lose-it points out that this often doesn’t work and still requires active use. I was thinking about how the examples of successful VN put the VN in another layer: ALPN in TLS determining HTTP versions, and Ethernet types determining IPv4 vs IPv6. Since VN is fraught for ensuring active use, putting it in another protocol’s extension is something that has worked.
+
+Martin: This is another way the core thesis of use-it-or-lose it holds true. When you have a single protocol, and it needs to use an untested mechanism to use version 2, you don’t know if it will work. This is an example of how to apply that. Let’s expand on it.
+
+EKR: I don’t think the cuts here are the cuts between VN that works and VN that doesn’t, but protocols that have in-band VN versus ones that don’t. You don’t want to have to spit out an HTTP/1.1 request in order to switch to HTTP/2. So you do out-of-band VN when it’s non-interactive, like IP, or you’re trying to reduce round trips, like ALPN.
+
+Tommy: So the main reason we used ALPN was to reduce round trips?
+
+Martin: That was the motivation, yes.
+
+Tommy: It did make it very easy to cut over to a new version, though, rather than making the versions compatible.
+
+EKR: Right, that wouldn’t have worked, since you would need to do HTTP/1.1 and then send an upgrade.
+
+Martin: I think this is going hand in hand. The reason we did this for HTTP/2 was performance, but it had the consequence of relying on a mechanism that was well-tested and proven. I think the IP example will be far more interesting. IPv4 *has* a version number field, and we tried to deploy with a 6 in that field.
+
+EKR: That needs to be unpacked. Why didn’t it work? It doesn’t work because people didn’t accept the 6.
+
+Martin: Yes, because the network had effectively ossified in some way. Things rejected any version that wasn’t 4.
+
+EKR: I’m not persuaded that that was the primary reason that IPv6 wasn’t deployed faster :)
+
+Brian: It’s not that they were expecting the 4 to be there, they were expecting all of the other bits in the header to be where they expected. The middle boxes also expected the first bytes after the IP header to be port numbers, no matter what.
+
+EKR: Wait—if you’re a middlebox, unless you don’t have any addressing, you either speak IPv6 or you don’t. And if you don’t, nothing will help, and if you do, it will work.
+
+Brian: If you are looking at the wire image of a protocol, there are two things you can do with a version you don’t understand: you can pass it forward, or you can drop it, since you can’t perform your function. We should get someone who actually was around for this to comment…
+
+EKR: Either you have a v6 address or you don’t, and if you don’t you’re not on an IPv6 network.
+
+Brian: The problem we’re talking about there is that IP (any version) on Ethernet could have meant: I’m IP, please look at my version number for more details. But what everyone did was to look at the ether type and say “this must be an IPv4 header”.
+
+EKR: How could it have behaved differently?
+
+Brian: Fair enough, if you understand the ether type but you still don’t handle IPv6.
+
+Tommy: This is something we should unearth the history for, but you presumably could have used the old ether type, and then when you upgraded your router, you could have handled the switch in your IP code. But, just as ALPN gives software the opportunity to load in a different stack in software, it’s convenient to use the ethernet code shunt the processing off to a new IPv6 code.
+
+Brian: I wonder if what we learn from ALPN and ether type is that we can’t do in-band VN without assistance from the layer beneath. And if you don’t have a layer beneath you, invent one!
+
+Colin: I wonder how much this is to do with being a parallel fallback for the ALPN case, but not the other cases. In the web scenario, there’s almost always some legacy HTTP 1.1 you can use in case your new version doesn’t work. For IPv6, the fallback is not always immediately obvious. How do you fall back if you don’t have the address?
+
+EKR: ALPN isn’t about fallback; the point is to determine what versions are supported for an https URI without just probing. 
+
+Colin: But then there is an alternative that exists at the time, which there may not be for IPv6.
+
+Martin: Now we’re talking about the virtues of hard cutovers in versions.
+
+Tommy: A lot of the out-of-band examples are tied to hard cutovers. In Section 2 of the document, it discusses SNMP, which had hard failures and forced hard cutovers. You don’t need to worry about the middle space where you are negotiating in-band, but there may be bugs or things don’t work quite right.
+
+Martin: SNMP is an example of VN that was in-band but was successful. It’s curious and we should dig in. SNMP v2 had very clear rules about what to do with packets with a different version. Maybe it was luck, but implementations followed the simple rules and it was relatively easy to deploy new version. When you do have VN, it should maybe be as simple as possible.
+
+Ben: The SNMP case is interesting in that the difference between the protocols is not hugely security relevant, unlike TLS 1.1 to TLS 1.3. For SNMP, maybe you get more data, but you don’t care that much if you’re stuck on an old version
+
+Martin: Yes, I think even that the switch to v3 wasn’t very fast, and many still used v2 for a long time.
+
+Tommy: For the hard failure, does it work such that you try the version you want, it gets rejected, and you just try again with an older version? No intention of building a graceful negotiation mechanism.
+
+Martin: Essentially, yes. I think it’s also the case that many devices would have the version configured into them, so you don’t even need to do probing.
+
+Ben: And if you are doing automated monitoring, you just know what you’re going to talk, and when you have a new version, you push an update. You may have some overlap for debugging, but it’s not a huge problem.
+
+Tommy: Then really if it’s a matter of configuration, it’s like the other out-of-band mechanisms. It’s not ALPN or another protocol, it’s just completely out of band (configuration). And that can make it a good example of success.
+
+Brian: Yes, and in the chat we’ve been saying “version negotiation over YANG”, which is exactly that. In a single management plane, yeah! It’s simple.
+
+Martin: That’s also what SVCB is trying to solve by shoving info in DNS.
+
+Brian: Great! Put everything in DNS and close the program.
+
+Tommy: To what degree is in-band VN always a bad idea? This gets to the question of what kind of extensions really need to be new versions, as opposed to just adding extensions. Related to discussions in HTTP, where we’re talking about a -bis of HTTP/2. People are asking if we should have a new ALPN; should we rev versions to avoid cruft/ossification or deployments we don’t like, even if the protocol is still intelligible.
+
+Brian: It might be good to look at the success of deprecations of versions, instead of the deprecations of extensions. This is not based on data… It’s very easy to add extensions, but relatively difficult to take away. It was hard to remove bad cipher suites, since both sides need to stop trying to use it, and there’s fear of getting rid of one because it’s a tradeoff between security and connectivity. A hard version change allows you to deprecate functionality, and never have old extensions in the new version. Use extensions to add, and version numbers to take away! We should look at the history to see if that dynamic actually shows up widely.
+
+Martin: Carsten points out that you can negotiate features to take things away, and I’ve seen some cases where that’s been successful. We did this deprecation in HTTP/2 for cipher suites, and it was one of the rockiest parts.
+
+Ben: That was a lot because of the layering violation between TLS and HTTP.
+
+Martin: But now people don’t use the cipher suites at all, which is great.
+
+Brian: Do they not use them because of the protocol changes, or the PR campaign?
+
+Martin: Hard to know which drove which, but it was very clear for the people deploying HTTP/2.
+
+Tommy: As we’re doing a -bis of HTTP/2, say that you wanted to get rid of HTTP server push: you’d have the option of revving the protocol with an ALPN, or you could have a negotiation in SETTINGS or something similar. We do have the option of an extension for which a client or server fails hard when they can’t negotiate. I don’t need a new version just to fail hard. Do we think we can decouple failing hard from versions?
+
+Brian: I’m hesitant to advocate hard fail or fast fail as a solution for all environments. The environments many of us work in have lots of fast fail in a continuous integration model, to detect issues early in development. There are deployment patterns where that has as different tradeoff. It’s back to the Postel’s principle argument, and this can’t be disconnected from that. You can have long arguments from first principles, so I’m not sure how to constructively talk about that.
+
+Tommy: Going off the continuous integration point: one way to think of versions is that a version is a snapshot of various extensions that go together commonly. If you view the protocol as a continuum with extensions coming and going, I would almost want to be able to say “this is the minimum snapshot I require”, or “here are the snapshots I support”.
+
+Brian: That works really well in a web environment, yes. Imagine a future in which we had this continuous integration all the way through. We’d have new versions of IP biweekly, because everything is software. There’s a build horizon of six months back, so 12 versions back. Anything further back than that isn’t supported. What you in that world is a boot loader protocol. Let’s say I went on a really long vacation and was offline for six months. You boot your device and *boom* you can’t even speak IP anymore. How do you get back to the state where you have connectivity? This sounds ridiculous if you don’t work in a monolithic repository like some of us do! But you’d need to keep some part of the stack that never changes that’s always enough to reload the stack.
+
+Tommy: Every protocol could have the baseline functionality that you always must have, with lots of extensions on top.
+
+Ekr: One difficulty here is how you ensure that you really get the highest supported version, instead of the attacker’s preferred version. This is a reason to have a version negotiation that keeps working is that you can have guarantees about what actually is available. One of the best analyses of this is by Green, for TLS. It’s very hard to determine the guarantees in hard fail circumstances.
+
+Tommy: What’s the best practice, then, other than simply not supporting the older versions?
+
+Ekr: The way it works in TLS and QUIC is that the mechanism for version negotiation is folded into the transcript of traffic establishment, so as long as the version negotiation has strong integrity, the negotiation is retroactively blessed.
+ Martin: That also means that the weakest version you support determines the integrity of the version negotiation.
+
+Ekr: Right, and there’s no way to avoid that.
+
+Tommy: Does that hold true for versions of protocols within the security boundary, such as HTTP after TLS?
+
+Ekr: Well, Martin wrote a draft about what happens if the protocols negotiated have different networking properties, and again the solution is to fold the negotiation into the transcript. It’s the best solution we know about.
+
+Martin: I want to roll back to the original point: version negotiation is something that needs extra attention, and the draft doesn’t yet provide any advice on that. One solution is to hoist it into a layer that has the other properties espoused in the draft already.
+
+Tommy: I’m glad you agree—when I was reading through the document, there’s a lot about VN in section 2, but the latter part of the document doesn’t come back to that and provide advice. It seems like it would be useful to segment out the analysis and advice depending on what layer a protocol is operating at. This feels like what we think about for protocols like TLS, HTTP, etc; but we should call out if the protocol is the one negotiating security, or is within the handshake, etc. We have different approaches for different scenarios. For example, protocols exposed to middle boxes have lots of extra concerns that others don’t need to worry about.
+
+Tommy: A while ago in the chat, Mirja had asked “how many extension mechanisms do you need in a protocol to be on the safe side?. One of the conclusions I’ve been reaching from this discussion is that you want to have very few mechanisms, that are reused as much as possible.
+
+Ben: One pattern that’s been successful is to not change the base protocol number, but just a bunch of stuff with negotiated extensions. And if I need to make a drastic change, I’ll do that at a lower level.
+
+Mirja: That’s the TCP model, yes, and that has also failed in some cases. In TCP, we’re stuck because we have one main extension mechanism. In principle, I don’t think there’s a difference between extensions and versions—but versions should always be a bigger change or a reset. Even in QUIC, where we want version flexibility, we have a bunch of extensions.
+
+Ekr: One difference is that extensions are usually orthogonal; versioning is linear. You could have a QUIC implementation that does DATAGRAM, but no combined ACKs, etc. Versioning is never orthogonal, and you can’t make subsets. You can’t do only part of version 6 and part of 7.
+
+Mirja: But you could always define a version 11 that combined 6 and 7, technically.
+
+Ekr: That falls apart incredibly quickly, as a combinatorial explosion.
+
+Tommy: If you wanted a version for each possible combination, it does explode. But you could take the extensions linearly and make those versions, and you wouldn’t necessarily promise that you support all extensions, but you’d at least *know* about all of the extensions up to that point. All of the defined extensions up to this point could be guaranteed not to break my implementation.
+
+Ekr: That would work, but that’s very different from the a la carte mechanisms we have today. For TLS, an implementation needs to not choke when it receives any extension it doesn’t recognize, but it doesn’t need to be able to do anything with it.
+
+Tommy: I think this relates to some of the greasing and coordination topics. Coordination for greasing is about agreeing on the random values that would be chosen by implementations, and those have to be concerned about stomping on legitimate values. Coordination is one way to prevent that. But another way is to have this rolling version number that indicates what extension values you are aware of.
+
+Martin: That’s just compression—if TLS 1.4 is just TLS 1.3 + a set of extensions, that’s just compression.
+
+Ben: If you make an analogy to the combinatoric explosion, this version number compression lets you cut off parts of that explosion.
+
+Colin: Jumping over to a comment from Brian in the chat: “we should build a small set of minimal substrates for various interaction patterns and invest in them”. Does this get easier as the network is more mature and has more bandwidth, and we’re not trying to optimize things quite as furiously?
+
+Brian: We’re still optimizing things like latency a lot… but that’s an interesting insight.
+
+Martin: I suspect the balance has shifted, but I still see people trying to cut down the number of bytes for real time media. People still push for 4-byte auth tags instead of 16-byte tags, etc.
+
+Brian: How much of that is people trying to meet a real requirement, or that we’ve educated a generation of network engineers to shave off bits.
+
+Martin: There’s also the fact that the people who work on this work on codecs, and talk about sub-bits.
+
+Brian: And that’s what allows us to waste bits in the network! So I think you can view the evolvability of the stack as one of the things that you can spend bandwidth overhead on.
+
+Brian: For the minimal substrate idea, you either need to identify the set of protocols that exist today that you’ll use, or wait 20 years to forklift the Internet. So, you’d have JSON on H2/H3, plus some streaming stuff.
+
+Martin: That speaks to the value of the protocols that have high use, since they continue to work and evolve, and don’t need to have new effort to solve problems.
+
+Tommy: And if there’s something that you care about in a protocol, but you can’t forklift the Internet, just make your idea an extension of the existing protocol.
+
+Martin: That’s the central thesis here, yes.
+
+Ben: We shouldn’t just make it easy to do the right thing, we should make it necessary to do the right thing in order to work at all. That comes up in several guises. If TLS extensions are the version negotiation, you need to implement extensions. We can do that a lot with crypto as well. If they get rolled into the keys, if you do it wrong, you don’t work at all.
+
+Martin: That was a nice innovation in TLS, when we started to authenticate more by rolling into keys.
+
+Tommy: That may be worth a call-out in the document, as a way to bring dependency into the protocol.
+
+Martin: I’d want to find examples of that, such as the Retry mechanism in QUIC.
+
+Mirja: One thing I found interesting about the document was the relationship between greasing and invariants. Everything you don’t use will become an invariant. The corollary is that the everything that should be extensible must be regularly used.
+
+Ben: I filed an issue during this call, to see if we can point to a case where just writing down the invariants is enough to imply that everything else is subject to change, or do we need to still grease everything else to ensure the other points still work?
+
+Martin: I think we’re in the middle of the grand experiment for that one.
+
+Mirja: If we want to make people understand that, we should make it more prominent at the beginning of the document.
+
+Tommy: It’d be good to highlight the greasing and invariant bits at the start of the doc. One other thing I note that isn’t discussed in the document (because it’s a more recent discussion) is the coordination of greasing. That’s not mentioned in the document yet. How would that fit in? Is that too nascent still?
+
+Ben: One of the general challenges with greasing is that you have to be careful if you can’t place a time bound on the greasing. You need to be able to guarantee it’s only used for 6 weeks or 6 months.
+
+Tommy: A time bound, yes, or a version number bound like discussed before. But something to guarantee that values could be reclaimed.
+
+Ben: This was coming up with IANA—“in the 4 billion code point registry, do you really want us to list every 20th value as reserved?”
+
+Martin: Mike Bishop worked out that on his home Internet connection, it would take 10 millennia to download the registry page in that case!
+
+Colin: Do we need to coordinate the greasing points, or do they just need to be mutually non-understandable, so it doesn’t matter if they clash?
+
+Martin: That was Tommy’s idea; I don’t the future here really is in greasing. It’s in the big actors coordinating such that implementations routinely encounter new code points, regardless of if they represent real new features or not. That might just be down to everyone sending code point 57 in January, and then stopping.
+
+Brian: You could do that with a registry that you could download, almost like a key schedule. You go to a website and learn that you should “send this on this date”.
+
+Ekr: I wonder if we’re over indexing on this. There are some high profile cases where things ossified pretty badly, but many of those systems learned the lesson. It’s not that people won’t make the mistake again, but we may not find the implementations have as bad of problems in the future. It’s an open question.
+
+Mirja: I tried to make the comment earlier too, that active use is a goal, but greasing is a hack for when you can’t do active use. We have been using greasing in cases where the is ossification already to detect ossification, but we have had less experience putting it into a brand new protocol. If we can’t design a protocol that encourages active use, that’s the problem.
+
+Tommy: If we are designing a new green field protocol, can we set things up to have a dependency on active use, such that greasing isn’t required in the same any more, so we don’t need to add extra grease five years later.
+
+End of time
+
+===
+
+Jabber chat:
+
+from Ben Kaduk to Everyone:    1:37  PM
+(https://github.com/intarchboard/use-it-or-lose-it/issues/25)
+from Brian Trammell to Everyone:    1:39  PM
+is there any situation in which we're *not* trying to reduce roundtrips?
+from Carsten Bormann to Everyone:    1:40  PM
+There is a difference between protocols at leisure and protocols where the first message has to be a hit
+from EKR to Everyone:    1:40  PM
+Well, it's not required for TLS, for instance
+from Ben Kaduk to Everyone:    1:42  PM
+The first message not being a hit for TLS implies a downgrade dance, doesn't it?
+from EKR to Everyone:    1:42  PM
+Not really, no
+from EKR to Everyone:    1:42  PM
+I mean what do you mean "not a hit"
+from EKR to Everyone:    1:42  PM
+You mean "interop failure"
+from Carsten Bormann to Everyone:    1:42  PM
+Need more roundtrips
+from Martin Thomson to Everyone:    1:42  PM
+What if they forwarded the v6 packet as if it were v4?
+from Martin Thomson to Everyone:    1:43  PM
+I'm speculating here.
+from EKR to Everyone:    1:43  PM
+No, TLS isn't that way
+from Eric Vyncke to Everyone:    1:43  PM
+This is what IPv10 is assumed to do Martin ;-)
+from Martin Thomson to Everyone:    1:43  PM
+IPv10 will solve all our problems, clearly.
+from Ben Kaduk to Everyone:    1:45  PM
+I guess I had too much in my head and not on the page, there.  If in some hypothetical world, new versions of TLS differed radically, in the ways that h2 and h1 differ, then a version negotiation for TLS would involve "try the new one and get an error back" and thus the downgrade dance to the older version.  But because that would be a terrible world, TLS doesn't do that, and the ClientHello format is stable across versions so you can actually do the negotiation inband without the downgrade dance
+from EKR to Everyone:    1:46  PM
+@Kaduk: right. QUIC is fighting with this as well
+from Martin Thomson to Everyone:    1:46  PM
+Ekr, you should probably look at some of the discussion about changing the TLS extension codepoint.  Compatible upgrade is not easy between draft and release versions.
+from Carsten Bormann to Everyone:    1:47  PM
+The ethertype is exactly equivalent to the ip version number except that implementations had to look at the ethertype (to distinguish ARP from IP) already.
+from EKR to Everyone:    1:47  PM
+@MT: I feel like that is evidence of mismanagement, not that it's not easy
+from Colin Perkins to Everyone:    1:48  PM
+@cabo so ethertype vs IP version is just saying avoid redundancy?
+from Eric Vyncke to Everyone:    1:49  PM
+or were different ethertypes intended to be used by pure layer-2 devices ?
+from Carsten Bormann to Everyone:    1:49  PM
+Colin: No, it's just an example of use it or lose it
+from Martin Thomson to Everyone:    1:49  PM
+Now of course everyone uses YANG
+from Carsten Bormann to Everyone:    1:49  PM
+VLAN tags certainly were
+from Brian Trammell to Everyone:    1:50  PM
+each layer is always intended only to be used by devices at that layer
+from Brian Trammell to Everyone:    1:50  PM
+and other lies you can tell yourself
+from Eric Vyncke to Everyone:    1:50  PM
+;-)
+from MAPRG Research Group to Everyone:    1:50  PM
+version negotiation via YANG?
+from Brian Trammell to Everyone:    1:50  PM
+it'd work.
+from Carsten Bormann to Everyone:    1:50  PM
+That's the "at leisure" case.
+from Carsten Bormann to Everyone:    1:50  PM
+In CoRE, we try to make feature capability available at discovery time
+from MAPRG Research Group to Everyone:    1:50  PM
+one version negotiation mechanism to rule them all
+from MAPRG Research Group to Everyone:    1:51  PM
+would at least be a useful use of YANG
+from Eric Vyncke to Everyone:    1:51  PM
+Assuming that YANG does not have multiple versions though
+from MAPRG Research Group to Everyone:    1:52  PM
+I think if I write YANG once more I have to drink
+from Brian Trammell to Everyone:    1:52  PM
+eric! shhhhhhhh!
+from Carsten Bormann to Everyone:    1:52  PM
+You first need to know whether your YANG is XML, JSON, or CBOR
+from Martin Thomson to Everyone:    1:53  PM
+Content type sniffing is fine.
+from Carsten Bormann to Everyone:    1:53  PM
+But if my first packet is supposed to be a hit, what do I use?
+from Ben Kaduk to Everyone:    1:54  PM
+Consider RPL, where MOP version 7 is being used as a flag day for turning on/off a bunch of stuff
+from Carsten Bormann to Everyone:    1:55  PM
+A feature ("extension") can take away.
+from MAPRG Research Group to Everyone:    1:55  PM
+So how many extension mechanisms do you need in a protocol to be on the safe side?
+from Carsten Bormann to Everyone:    1:56  PM
+Ben: That is the "roll-up" usage of versions.  
+from Colin Perkins to Everyone:    1:56  PM
+A lot of features go away, we just don't know they go away?
+from Brian Trammell to Everyone:    1:57  PM
+my impression is a lot of features become unused and instead of going away become implementation-level security vulnerabilities
+from Eric Vyncke to Everyone:    1:57  PM
+@Brian +1
+from Colin Perkins to Everyone:    1:58  PM
+how to know you don't need to implement anymore because no-one uses?
+from Eric Vyncke to Everyone:    1:58  PM
+@Colin: this is a BIG BIG question for manufacturers BTW...
+from Carsten Bormann to Everyone:    1:58  PM
+You standardize a feature "2020" that implies you don't use 2019's features any more
+from Carsten Bormann to Everyone:    1:59  PM
+Colin: The discussion about deprecating old TLS versions is an example that you don't know.
+from Carsten Bormann to Everyone:    2:01  PM
+Are your versions totally ordered?
+from Martin Thomson to Everyone:    2:01  PM
+ E'ric: we use telemetry for that, but not everyone has that luxury.
+from Martin Thomson to Everyone:    2:01  PM
+Total ordering of versions is a 6709 question.
+from MAPRG Research Group to Everyone:    2:01  PM
+Do we now touch on the arch-discuss/IoTops discussion on "How old is too old and what this means for product lifecycles?"
+from Martin Thomson to Everyone:    2:02  PM
+https://tools.ietf.org/html/rfc6709#section-4.1
+from Martin Thomson to Everyone:    2:02  PM
+Wow, webex linking doesn't understand anchors.
+from MAPRG Research Group to Everyone:    2:02  PM
+or I guess this started with the last call of draft-ietf-tls-oldversions-deprecate
+from Ben Kaduk to Everyone:    2:03  PM
+Indeed
+from Ben Kaduk to Everyone:    2:03  PM
+If you have your industrial equipment that is "build once, deploy, don't touch for 20 years", do you care about protocol version negotiation at all?
+from Eric Vyncke to Everyone:    2:04  PM
+@Ben, the equipment probably not but the network of those equipments ?
+from MAPRG Research Group to Everyone:    2:04  PM
+I guess we could do better in clearly stating expectation about updates for the protocols we develop
+from Eric Vyncke to Everyone:    2:05  PM
+This is part of the OPS directrate review BTW
+from Colin Perkins to Everyone:    2:06  PM
+https://datatracker.ietf.org/doc/draft-kaimindermann-securecryptoconfig/
+from Brian Trammell to Everyone:    2:07  PM
+ben: you care when changes to other parts of the network stack change out from underneath you and your big pile of metal doesn't work anymore...
+from Brian Trammell to Everyone:    2:07  PM
+in that case, you could fix the world with a catanet -- IPv4 to continual-evolution-net gateways everywhere
+from MAPRG Research Group to Everyone:    2:07  PM
+Does throwing TCP away and build a whole, brand-new protocol count as versioning?
+from EKR to Everyone:    2:08  PM
+https://eprint.iacr.org/2016/072
+from Brian Trammell to Everyone:    2:08  PM
+thanks ekr
+from EKR to Everyone:    2:08  PM
+I guess there's only really one paper I know of :)
+from MAPRG Research Group to Everyone:    2:08  PM
+except that that new shiny thing doesn't get an own protocol number because that part is ossified
+from Brian Trammell to Everyone:    2:11  PM
+ALL OF THEM
+from Carsten Bormann to Everyone:    2:11  PM
++1
+from Brian Trammell to Everyone:    2:11  PM
+...including endpoint upgrade by sending people usb sticks with a new stack via post...
+from Carsten Bormann to Everyone:    2:12  PM
+Leave enough bits
+from Carsten Bormann to Everyone:    2:12  PM
+They are dual, indeed.
+from Colin Perkins to Everyone:    2:12  PM
+or have a signalling protocol, so the number of bits don't matter
+from Ben Kaduk to Everyone:    2:13  PM
+"extensions are orthogonal, except when they aren't"
+from Carsten Bormann to Everyone:    2:13  PM
+https://www.ietf.org/archive/id/draft-ietf-core-senml-versions-01.html
+from Carsten Bormann to Everyone:    2:14  PM
+Where we started out with a foggy idea of a version number and decided we wanted to have features instead
+from Colin Perkins to Everyone:    2:15  PM
+people don't want to implement all the features -> version numbers force them to
+from Ben Kaduk to Everyone:    2:15  PM
+NFSv4 (IIRC) has to some extent stopped trying to do new versions and is instead doing orthogonal-ish extensions
+from Martin Thomson to Everyone:    2:15  PM
+Feature negotiation is good, provided that you have confidence in the substrate remaining fit for purpose.
+from Carsten Bormann to Everyone:    2:15  PM
+(SenML is a format, so there is no negotiation.  Also, more ways to express features are provided than the version number.)
+from Martin Thomson to Everyone:    2:15  PM
+As the SenML is so thin, that's entirely reasonable.
+from Martin Thomson to Everyone:    2:16  PM
+You might also frame that choice as relying on content negotiation or resource-based separation for incompatible changes.
+from spencerdawkins.ietf@gmail.com to Everyone:    2:16  PM
+@Ben - one of the reasons for NFSv4 moving to an extensions model was the sixe of the base spec. One of the Stephan Farrel-era IESGs revolted and said "don't ever darken our door with a multi-hundreds-of-pages spec again" :-)
+from spencerdawkins.ietf@gmail.com to Everyone:    2:16  PM
+("size")
+from Carsten Bormann to Everyone:    2:17  PM
+Version bumps are more useful for losing features
+from Brian Trammell to Everyone:    2:17  PM
+"Feature negotiation is good, provided that you have confidence in the substrate remaining fit for purpose." --> "we should build a small set of minimal substrates for various interaction patterns and invest in them"
+from Brian Trammell to Everyone:    2:17  PM
+or IOW replace the Internet with YANG on QUIC on IPv4
+from MAPRG Research Group to Everyone:    2:18  PM
+IPv4?
+from Eric Vyncke to Everyone:    2:18  PM
+Brian just wants to annoy me or his 4-bit IP version field has rolled over
+from Ben Kaduk to Everyone:    2:19  PM
+I have a phrase that I sometimes say to myself, "<X> has been sacrificed on the altar of latency"
+from Brian Trammell to Everyone:    2:19  PM
+sorry, it's late, couldn't resist the troll
+from Ben Kaduk to Everyone:    2:21  PM
+Oh man, we only have to wait 10 years to forklift kerberos stuff!
+from spencerdawkins.ietf@gmail.com to Everyone:    2:22  PM
+@kaduk - the starting year is also ... negotiable ...
+from Ben Kaduk to Everyone:    2:23  PM
+I'll try to write down the pithy bit: "we want to not just make it easy to do the right thing; we want to make it so that if you do the wrong thing, it doesn't work at all"
+from Brian Trammell to Everyone:    2:24  PM
+...oh right, the document...
+from spencerdawkins.ietf@gmail.com to Everyone:    2:27  PM
+IANA doesn't get paid NEARLY enough ... 
+from spencerdawkins.ietf@gmail.com to Everyone:    2:29  PM
+"Interacts badly with failover/failback" ...
+from Martin Thomson to Everyone:    2:29  PM
+Yes, overindexing seems entirely likely.
+from Martin Thomson to Everyone:    2:30  PM
+David Benjamin proposed that we have a "tweak of the month" for TLS, but that's not especially cheap and might not be necessary.
+from Eric Vyncke to Everyone:    2:30  PM
+Just wondering whether 'greasing' could be used on ASIC-based devices (= fast path) w/o triggering monitoring/logging events (= slow path). Like ICMPv6 parameter problems.
